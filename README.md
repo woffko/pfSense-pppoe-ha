@@ -8,8 +8,8 @@ pfSense supports two different PPPoE backends:
 - **Legacy `mpd` backend**  
   In this mode, it was possible to enable HA by binding a PPPoE interface directly to a CARP VIP.  
 
-- **New `if_pppoe` backend (default since pfSense 2.7 / 23.05)**  
-  This backend no longer allows binding PPPoE directly to a CARP VIP, breaking traditional HA setups.  
+- **New `if_pppoe` backend (available since pfSense 2.8 / 25.07)**  
+  This backend no longer allows binding PPPoE directly to a CARP VIP, breaking HA setups.  
 
 **This package restores high availability for dynamic PPPoE interfaces.**  
 It works by listening for CARP state changes of a specified CARP VHID which represents the state the current firewall should be in and enabling or disabling the configured PPPoE interface accordingly.  
