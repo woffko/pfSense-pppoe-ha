@@ -21,7 +21,7 @@ If you still use legacy PPPoE (`mpd` backend), you can also use this package. In
 
 ## What it does
 
-- On **CARP MASTER**: brings the PPPoE interface(s) **up** (`ifconfig up`)  
+- On **CARP MASTER**: brings the PPPoE interface(s) **up** (`/pfSctl -c 'interface stop <iface>'`)  
 - On **CARP BACKUP/INIT**: brings the PPPoE interface(s) **down** (`ifconfig down`)
 - GUI functionality to conveniently configure the WAN/PPPoE Interface(s) and the corresponding CARP groups
 
