@@ -1,0 +1,28 @@
+#!/bin/sh
+# PROVIDE: pppoe_ha
+# REQUIRE: DAEMON
+# KEYWORD: nojail
+
+. /etc/rc.subr
+
+name="pppoe_ha"
+rcvar="${name}_enable"
+
+load_rc_config $name
+
+: ${pppoe_ha_enable:=YES}
+
+start_cmd="${name}_start"
+stop_cmd=":"
+
+pppoe_ha_start()
+{
+    # (Re)load devd rule (in case devd doesn't auto-pick /usr/local/etc/devd/*.conf)
+    if service devd rcvar >/dev/null 2>&1; then
+        service devd reload >/dev/null 2>&1
+    fi
+    # Reconcile PPPoE iface states with current CARP state
+    /usr/local/sbin/pppoe_ha_event reconcile >/dev/null 2>&1
+}
+
+run_rc_command "$1"

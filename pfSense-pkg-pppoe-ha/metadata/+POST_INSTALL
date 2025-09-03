@@ -1,0 +1,103 @@
+#!/bin/sh
+# Post-install for pfSense-pkg-pppoe-ha
+# - Try to register with pfSense via rc.packages (best effort)
+# - If that fails (common for local pkg add), inject menu into config.xml
+# - Insert our devd CARP hook
+# - Reload devd and reconcile PPPoE state
+
+set -e
+
+# --- 1) Attempt registration via rc.packages ---
+PKGNAME="pfSense-pkg-pppoe-ha"
+
+PKGNAME="pfSense-pkg-pppoe-ha"
+PHP_BIN="${PKG_ROOTDIR}/usr/local/bin/php"; [ -x "$PHP_BIN" ] || PHP_BIN="/usr/local/bin/php"
+RC_PACKAGES="${PKG_ROOTDIR}/etc/rc.packages"; [ -x "$RC_PACKAGES" ] || RC_PACKAGES="/etc/rc.packages"
+
+if [ -x "$PHP_BIN" ] && [ -f "$RC_PACKAGES" ]; then
+  "$PHP_BIN" -f "$RC_PACKAGES" "$PKGNAME" POST-INSTALL >/dev/null 2>&1 || true
+fi
+
+# --- 2) If menu entry is still missing, append it using the native list shape ---
+
+"$PHP_BIN" -r '
+  require_once("config.inc");
+  require_once("util.inc");
+  global $config;
+
+  $config = parse_config(true);
+
+  $menus = config_get_path("installedpackages/menu", []);
+  if (!is_array($menus)) { $menus = []; }
+
+  $targetUrl = "/pkg_edit.php?xml=pppoe_ha.xml&id=0"; // raw &, serializer escapes once
+  $exists = false;
+  foreach ($menus as $m) {
+    if (is_array($m) && ($m["url"] ?? "") === $targetUrl) { $exists = true; break; }
+  }
+
+  if (!$exists) {
+    $menus[] = [
+      "name"        => "PPPoE High Availability",
+      "tooltiptext" => "Enable/disable PPPoE by CARP state",
+      "section"     => "Services",
+      "url"         => $targetUrl,
+    ];
+    config_set_path("installedpackages/menu", $menus);
+    write_config("Add PPPoE HA menu (native list fallback)");
+  }
+' >/dev/null 2>&1 || true
+
+# Clear cached menus only (no GUI restart needed)
+rm -f /tmp/*menu* /tmp/.menu* >/dev/null 2>&1 || true
+
+
+
+
+# --- 3) Inject our devd rule into /etc/pfSense-devd.conf ---
+DEVDCONF="/etc/pfSense-devd.conf"
+MARK_BEGIN="# BEGIN PPPoE_HA DEVd RULE (pfSense-pkg-pppoe-ha)"
+MARK_END="# END PPPoE_HA DEVd RULE (pfSense-pkg-pppoe-ha)"
+RULE_CONTENT=$(cat <<'EOF'
+notify 100 {
+    match "system" "CARP";
+    match "type"   "(MASTER|BACKUP|INIT)";
+    action "/usr/local/sbin/pppoe_ha_event carp $subsystem $type";
+};
+EOF
+)
+
+backup_if_needed() {
+    if [ -f "${DEVDCONF}" ] && [ ! -f "${DEVDCONF}.pppoe_ha.bak" ]; then
+        cp -p "${DEVDCONF}" "${DEVDCONF}.pppoe_ha.bak" || true
+    fi
+}
+
+install_rule() {
+    [ -f "${DEVDCONF}" ] || return 0
+    backup_if_needed
+    TMP="$(mktemp -t pppoe_ha_devd)"
+    awk -v mbegin="$MARK_BEGIN" -v mend="$MARK_END" '
+        BEGIN { inblk=0 }
+        $0 ~ mbegin { inblk=1; next }
+        $0 ~ mend   { inblk=0; next }
+        inblk==0    { print }
+    ' "${DEVDCONF}" > "${TMP}"
+    {
+        echo "${MARK_BEGIN}"
+        echo "${RULE_CONTENT}"
+        echo "${MARK_END}"
+    } >> "${TMP}"
+    cp "${TMP}" "${DEVDCONF}"
+    rm -f "${TMP}"
+}
+
+install_rule
+service devd reload >/dev/null 2>&1 || true
+
+# --- 4) Reconcile PPPoE state once after install ---
+if [ -x /usr/local/sbin/pppoe_ha_event ]; then
+    /usr/local/sbin/pppoe_ha_event reconcile >/dev/null 2>&1 || true
+fi
+
+exit 0

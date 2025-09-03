@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/local/bin/php -q /usr/local/sbin/pppoe_ha_event.php "$@"

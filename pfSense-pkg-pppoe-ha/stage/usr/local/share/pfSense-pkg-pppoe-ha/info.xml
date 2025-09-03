@@ -1,0 +1,8 @@
+<pfsensepkgs>
+    <package>
+        <name>pppoe_ha</name>
+        <descr><![CDATA[PPPoE High Availability – GUI + devd/rc handling]]></descr>
+        <version>%%PKGVERSION%%</version>
+        <configurationfile>pppoe_ha.xml</configurationfile>
+    </package>
+</pfsensepkgs>

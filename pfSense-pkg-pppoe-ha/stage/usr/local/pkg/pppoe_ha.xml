@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE packagegui SYSTEM "./schema/packages.dtd">
+<?xml-stylesheet type="text/xsl" href="./xsl/package.xsl"?>
+<packagegui>
+    <copyright>
+	<![CDATA[
+/*
+ * frr.xml
+ *
+ * part of pfSense (https://www.pfsense.org)
+ * Copyright (c) 2012-2024 Rubicon Communications, LLC (Netgate)
+ * All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+	]]>
+	</copyright>
+    <title>Services/PPPoE High Availability</title>
+    <name>pppoe_ha</name>
+    <version>0.1</version>
+    <include_file>/usr/local/pkg/pppoe_ha.inc</include_file>
+
+    <menu>
+        <name>PPPoE High Availability</name>
+        <tooltiptext>Enable/disable PPPoE by CARP state</tooltiptext>
+        <section>Services</section>
+        <configfile>pppoe_ha.xml</configfile>
+        <url>/pkg_edit.php?xml=pppoe_ha.xml&amp;id=0</url>
+    </menu>
+
+    <!-- no <service> yet; we’ll add backend/rc/devd later -->
+
+    <fields>
+        <field>
+            <name>Overview</name>
+            <type>listtopic</type>
+        </field>
+
+        <field>
+            <name>How it works</name>
+            <type>info</type>
+            <description><![CDATA[
+        Map an <strong>assigned PPPoE interface</strong> to a <strong>CARP VIP</strong>. When the VIP
+        is MASTER, the PPPoE interface will be enabled; when BACKUP, it will be disabled.
+        
+      ]]></description>
+        </field>
+
+        <field>
+            <name>Mappings</name>
+            <type>listtopic</type>
+        </field>
+
+        <!-- dynamic row table: one mapping per row -->
+        <field>
+            <fielddescr><![CDATA[PPPoE ↔ CARP VIP 
+      ]]></fielddescr>
+            <fieldname>none</fieldname>
+            <type>rowhelper</type>
+            <rowhelper>
+                <rowhelperfield>
+                    <fielddescr>Enabled</fielddescr>
+                    <fieldname>enabled</fieldname>
+                    <type>checkbox</type>
+                    <size>50</size>
+                </rowhelperfield>
+
+
+                <rowhelperfield>
+                    <fielddescr>PPPoE Interface</fielddescr>
+                    <fieldname>iface</fieldname>
+                    <type>select</type>
+                    <options>
+                        <option>
+                            <name>Loading…</name>
+                            <value></value>
+                        </option>
+                    </options>
+                    <size>30</size>
+                    <required />
+                </rowhelperfield>
+
+                <rowhelperfield>
+                    <fielddescr>CARP VIP</fielddescr>
+                    <fieldname>vipref</fieldname>
+                    <type>select</type>
+                    <!-- options will be filled dynamically by before_form hook -->
+                    <options>
+                        <!-- placeholder; will be replaced in before_form -->
+                        <option>
+                            <name>Loading…</name>
+                            <value></value>
+                        </option>
+                    </options>
+                    <size>30</size>
+                    <required />
+                </rowhelperfield>
+            </rowhelper>
+        </field>
+    </fields>
+
+    <!-- hooks implemented in /usr/local/pkg/pppoe_ha.inc -->
+    <custom_php_command_before_form>
+        ppha_before_form_pppoe_ha($pkg);
+    </custom_php_command_before_form>
+
+    <custom_php_validation_command>
+        ppha_validate_form_pppoe_ha($_POST, $input_errors);
+    </custom_php_validation_command>
+
+    <custom_php_resync_config_command>
+        ppha_resync_package_pppoe_ha();
+    </custom_php_resync_config_command>
+</packagegui>

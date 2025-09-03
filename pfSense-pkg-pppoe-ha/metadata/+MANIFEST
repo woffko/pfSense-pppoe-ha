@@ -1,0 +1,16 @@
+name= pfSense-pkg-pppoe-ha
+version= "0.1"
+origin= net/pfSense-pkg-pppoe-ha
+comment= PPPoE High Availability – GUI + devd/rc handling
+www= https=//docs.netgate.com/pfsense/en/latest/development/develop-packages.html
+maintainer= you@example.com
+licenses= [BSD2CLAUSE]
+desc= |
+  PPPoE High Availability for pfSense.
+  GUI: configure PPPoE ↔ CARP VIP mappings (Services → PPPoE High Availability)
+  Backend: devd rule listens for CARP transitions and toggles PPPoE up/down
+  rc helper: reloads devd and reconciles state at boot
+
+arch= FreeBSD:15:amd64 
+prefix= /
+

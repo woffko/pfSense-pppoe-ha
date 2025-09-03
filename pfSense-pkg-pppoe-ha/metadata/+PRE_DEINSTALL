@@ -1,0 +1,60 @@
+#!/bin/sh
+# Pre-deinstall for pfSense-pkg-pppoe-ha
+# - Remove our devd CARP hook from /etc/pfSense-devd.conf (if present) and reload devd.
+# - Remove our GUI menu entry from installedpackages/menu (native list shape).
+# - Clear cached menu files (no GUI restart).
+
+set -e
+
+# --- Remove devd rule block ---
+DEVDCONF="/etc/pfSense-devd.conf"
+MARK_BEGIN="# BEGIN PPPoE_HA DEVd RULE (pfSense-pkg-pppoe-ha)"
+MARK_END="# END PPPoE_HA DEVd RULE (pfSense-pkg-pppoe-ha)"
+
+if [ -f "$DEVDCONF" ]; then
+  # Delete the block between the exact marker lines (inclusive).
+  /usr/bin/sed -i '' \
+    -e "/^$(printf '%s' "$MARK_BEGIN" | sed 's/[^^]/[&]/g; s/\^/\\^/g')$/,/^$(printf '%s' "$MARK_END" | sed 's/[^^]/[&]/g; s/\^/\\^/g')$/d" \
+    "$DEVDCONF" || true
+
+  # Reload devd to drop the rule immediately
+  service devd reload >/dev/null 2>&1 || true
+fi
+
+# --- Remove our menu entry (installedpackages/menu is a numeric list of <menu> siblings) ---
+PHP_BIN="/usr/local/bin/php"; [ -x "$PHP_BIN" ] || PHP_BIN="/usr/local/sbin/php"
+
+"$PHP_BIN" -r '
+  require_once("config.inc");
+  require_once("util.inc");
+  global $config;
+
+  // Load fresh config
+  $config = parse_config(true);
+
+  // Fetch the native list of menu entries
+  $menus = config_get_path("installedpackages/menu", []);
+  if (!is_array($menus)) { $menus = []; }
+
+  $targetUrl = "/pkg_edit.php?xml=pppoe_ha.xml&id=0"; // raw &, serializer escapes to &amp;
+
+  $changed = false;
+  $filtered = [];
+  foreach ($menus as $m) {
+    if (is_array($m) && ($m["url"] ?? "") === $targetUrl) {
+      $changed = true; // drop this one
+      continue;
+    }
+    $filtered[] = $m;
+  }
+
+  if ($changed) {
+    config_set_path("installedpackages/menu", $filtered);
+    write_config("Remove PPPoE HA menu (cleanup)");
+  }
+' >/dev/null 2>&1 || true
+
+# Clear cached menus only (no GUI restart)
+rm -f /tmp/*menu* /tmp/.menu* >/dev/null 2>&1 || true
+
+exit 0
