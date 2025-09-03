@@ -1,7 +1,7 @@
 # pfSense-pkg-pppoe-ha  
 **High Availability for dynamic PPPoE interfaces by using pfSense High Availability (CARP)**
 
-## Why this package exists
+## Rationale for this package
 
 pfSense supports two different PPPoE backends:  
 
