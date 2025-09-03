@@ -1,6 +1,8 @@
 # pfSense-pkg-pppoe-ha  
 **High Availability for dynamic PPPoE interfaces by using pfSense High Availability (CARP)**
 
+![pfSense PPPoE HA Webgui](pppoe-ha-webgui.png?raw=true "pfSense PPPoE HA Webgui")
+
 ## Rationale for this package
 
 pfSense supports two different PPPoE backends:  
@@ -16,7 +18,6 @@ It works by listening for CARP state changes of a specified CARP VHID which repr
 
 If you still use legacy PPPoE (`mpd` backend), you can also use this package. In that case you don’t need to bind the PPPoE interface to a VIP – our package handles failover logic automatically.
 
----
 
 ## What it does
 
@@ -26,7 +27,6 @@ If you still use legacy PPPoE (`mpd` backend), you can also use this package. In
 
 This ensures that only the current CARP master attempts the PPPoE session, avoiding duplicate sessions and ensuring clean failover.
 
----
 
 ## Features
 
