@@ -148,6 +148,9 @@ function handle_carp_state_change($vhid, $state) {
         } elseif ($state === 'BACKUP') {
             ha_log("VHID {$vhid} BACKUP -> DOWN {$iface} ({$real})");
             iface_down($real);
+        } elseif ($state === 'INIT') {
+            ha_log("VHID {$vhid} INIT -> DOWN {$iface} ({$real})");
+            iface_down($real);
         } else {
             ha_log("VHID {$vhid} {$state} -> no action");
         }
@@ -174,6 +177,7 @@ function reconcile_all() {
 
         if ($state==='MASTER'){ ha_log("Reconcile: VHID {$vhid} MASTER - UP {$friendly} ({$real})"); iface_up($real); }
         elseif ($state==='BACKUP'){ ha_log("Reconcile: VHID {$vhid} BACKUP - DOWN {$friendly} ({$real})"); iface_down($real); }
+        elseif ($state==='INIT'){ ha_log("Reconcile: VHID {$vhid} INIT - DOWN {$friendly} ({$real})"); iface_down($real); }
         else { ha_log("Reconcile: VHID {$vhid} {$state} - no action"); }
     }
 }
