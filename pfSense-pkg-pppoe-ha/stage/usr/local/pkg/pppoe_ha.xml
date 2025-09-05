@@ -107,6 +107,35 @@
                 </rowhelperfield>
             </rowhelper>
         </field>
+		    <!-- Manual reconcile UI -->
+    <field>
+      <name>Manual Reconcile</name>
+      <type>listtopic</type>
+    </field>
+
+    <field>
+      <name>About Reconcile</name>
+      <type>info</type>
+      <description><![CDATA[
+        <p>
+          <strong>No automatic reconcile is performed after saving changes.</strong>
+          This is intentional to avoid race conditions and to reduce the risk of accidentally
+          locking yourself out or briefly breaking Internet connectivity while CARP/PPPoE are
+          transitioning.
+        </p>
+        <p>
+          If you changed mappings and want to immediately align PPPoE interface state with the
+          current CARP state, you can run a manual reconcile now.
+        </p>
+        <p>
+          <a class="btn btn-sm btn-primary"
+             href="/pkg_edit.php?xml=pppoe_ha.xml&amp;id=0&amp;ppha_reconcile=1">
+             Run Reconcile Now
+          </a>
+        </p>
+      ]]></description>
+    </field>
+
     </fields>
 
     <!-- hooks implemented in /usr/local/pkg/pppoe_ha.inc -->
@@ -121,4 +150,5 @@
     <custom_php_resync_config_command>
         ppha_resync_package_pppoe_ha();
     </custom_php_resync_config_command>
+
 </packagegui>
