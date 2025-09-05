@@ -122,6 +122,9 @@ function ppha_before_form_pppoe_ha(&$pkg) {
     if (empty($pkg['fields']['field'])) {
         return;
     }
+    if (!empty($_REQUEST['ppha_reconcile'])) {
+        ppha_run_reconcile_now();
+    }
     // normalize singletons
     if (isset($pkg['fields']['field']['type'])) {
         $pkg['fields']['field'] = [ $pkg['fields']['field'] ];
@@ -154,6 +157,19 @@ function ppha_before_form_pppoe_ha(&$pkg) {
         unset($rhf);
     }
     unset($field);
+}
+
+/** Run a one-shot reconcile and surface a GUI message */
+function ppha_run_reconcile_now() {
+    $rc = 0;
+    // Fire and forget; logs will appear under tag 'pppoe-ha'
+    mwexec('/usr/local/sbin/pppoe_ha_event reconcile', $rc);
+    // Tell the GUI something happened
+    $msg = $rc === 0
+        ? 'PPPoE HA: Reconcile executed. See Status → System Logs (tag "pppoe-ha") for details.'
+        : 'PPPoE HA: Reconcile attempted, but the helper returned a non-zero status. Check logs.';
+    // pkg_edit.php will render $savemsg if set
+    $GLOBALS['savemsg'] = $msg;
 }
 
 /* Validation (optional) */
