@@ -60,16 +60,29 @@ function parse_carp_subsystem($subsys) {
     return ['vhid'=>null, 'real'=>null, 'carpif'=>null];
 }
 
+/**
+ * Return CARP state (MASTER|BACKUP|INIT) for a given VHID, or null if not found.
+ * Works whether CARP appears under carpX: or under a real interface block.
+ */
 function get_carp_state_for_vhid($vhid) {
-    $out=[];
-    @exec("/sbin/ifconfig -a 2>/dev/null | /usr/bin/awk '/^carp[0-9]+:/ {iface=$1; sub(\":\",\"\",iface)} /vhid/ {for(i=1;i<=NF;i++){if(\$i==\"vhid\"){v=$(i+1)}}} /carp:/ {if (iface!=\"\" && v!=\"\"){print iface \" \" v \" \" \$0; iface=\"\"; v=\"\"}}'", $out);
+    $vhid = (int)$vhid;
+    $out = [];
+    $rc  = 0;
+    @exec('/sbin/ifconfig -a', $out, $rc);
+    if ($rc !== 0 || empty($out)) {
+        return null;
+    }
     foreach ($out as $line) {
-        if (preg_match('/^carp\d+\s+(\d+)\s+.*\bcarp:\s+(MASTER|BACKUP|INIT)\b/i', $line, $m)) {
-            if ((int)$m[1] === (int)$vhid) return strtoupper($m[2]);
+        // Look for a line like: "carp: MASTER vhid 19 ..." (order can vary)
+        if (preg_match('/\bcarp:\s*(MASTER|BACKUP|INIT)\b.*\bvhid\s+(\d+)/i', $line, $m)) {
+            if ((int)$m[2] === $vhid) {
+                return strtoupper($m[1]);
+            }
         }
     }
     return null;
 }
+
 
 function real_ifname_for_friendly($friendly) {
     $real = get_real_interface($friendly);
@@ -163,6 +176,7 @@ function handle_carp_state_change($vhid, $state) {
 function reconcile_all() {
     $rows = ppha_get_rows();
     if (!$rows){ ha_log("Reconcile: no mappings configured"); return; }
+    ha_log("Running reconcile for all configured mappings");
     $vips = config_get_path('virtualip/vip', []);
     foreach ($rows as $row) {
         if (empty($row['enabled']) || empty($row['vipref']) || empty($row['iface'])) continue;
