@@ -51,49 +51,8 @@ fi
 # Clear cached menus only (no GUI restart needed)
 rm -f /tmp/*menu* /tmp/.menu* >/dev/null 2>&1 || true
 
-
-
-
-# --- 3) Inject our devd rule into /etc/pfSense-devd.conf ---
-DEVDCONF="/etc/pfSense-devd.conf"
-MARK_BEGIN="# BEGIN PPPoE_HA DEVd RULE (pfSense-pkg-pppoe-ha)"
-MARK_END="# END PPPoE_HA DEVd RULE (pfSense-pkg-pppoe-ha)"
-RULE_CONTENT=$(cat <<'EOF'
-notify 100 {
-    match "system" "CARP";
-    match "type"   "(MASTER|BACKUP|INIT)";
-    action "/usr/local/sbin/pppoe_ha_event carp $subsystem $type";
-};
-EOF
-)
-
-backup_if_needed() {
-    if [ -f "${DEVDCONF}" ] && [ ! -f "${DEVDCONF}.pppoe_ha.bak" ]; then
-        cp -p "${DEVDCONF}" "${DEVDCONF}.pppoe_ha.bak" || true
-    fi
-}
-
-install_rule() {
-    [ -f "${DEVDCONF}" ] || return 0
-    backup_if_needed
-    TMP="$(mktemp -t pppoe_ha_devd)"
-    awk -v mbegin="$MARK_BEGIN" -v mend="$MARK_END" '
-        BEGIN { inblk=0 }
-        $0 ~ mbegin { inblk=1; next }
-        $0 ~ mend   { inblk=0; next }
-        inblk==0    { print }
-    ' "${DEVDCONF}" > "${TMP}"
-    {
-        echo "${MARK_BEGIN}"
-        echo "${RULE_CONTENT}"
-        echo "${MARK_END}"
-    } >> "${TMP}"
-    cp "${TMP}" "${DEVDCONF}"
-    rm -f "${TMP}"
-}
-
-install_rule
-service devd reload >/dev/null 2>&1 || true
+# restart devd to take our config
+service devd restart >/dev/null 2>&1 || true
 
 # --- 4) Reconcile PPPoE state once after install ---
 if [ -x /usr/local/sbin/pppoe_ha_event ]; then
