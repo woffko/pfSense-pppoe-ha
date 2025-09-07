@@ -1,0 +1,7 @@
+usr/local/pkg/pppoe_ha.xml
+usr/local/pkg/pppoe_ha.inc
+usr/local/sbin/pppoe_ha_event
+usr/local/sbin/pppoe_ha_event.php
+usr/local/etc/rc.d/pppoe_ha
+usr/local/etc/devd/pppoe_ha.conf
+usr/local/share/pfSense-pkg-pppoe-ha/info.xml
