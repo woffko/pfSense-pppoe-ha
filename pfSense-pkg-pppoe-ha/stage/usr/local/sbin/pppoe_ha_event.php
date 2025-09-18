@@ -38,6 +38,89 @@ function ppha_sanitize_token($s) {
     return $s;
 }
 
+function ppha_build_targets($only_vhid = null) {
+    $rows = ppha_get_rows();
+    $vips = config_get_path('virtualip/vip', []);
+    $targets = [];
+
+    if (!is_array($rows) || !is_array($vips)) {
+        return [];
+    }
+
+    foreach ($rows as $i => $row) {
+        // normalize; allow vipref '0'
+        $enabled = isset($row['enabled']) && strcasecmp((string)$row['enabled'], 'ON') === 0;
+        $vipref  = array_key_exists('vipref', $row) ? (string)$row['vipref'] : '';
+        $iface   = array_key_exists('iface',  $row) ? (string)$row['iface']  : '';
+
+        if (!$enabled || $vipref === '' || $iface === '') {
+            ha_log_debug("row[$i] skipped (enabled/vipref/iface missing or off)");
+            continue;
+        }
+
+        // resolve VIP + VHID
+        $vip = $vips[$vipref] ?? null;
+        if (!$vip || ($vip['mode'] ?? '') !== 'carp') {
+            ha_log_debug("row[$i] skipped (vipref {$vipref} not CARP or missing)");
+            continue;
+        }
+        $vhid = (int)($vip['vhid'] ?? -1);
+        if ($vhid < 0) {
+            ha_log_debug("row[$i] skipped (vipref {$vipref} has invalid VHID)");
+            continue;
+        }
+
+        if ($only_vhid !== null && (int)$only_vhid !== $vhid) {
+            continue;
+        }
+
+        // resolve interface
+        $real = get_real_interface($iface);
+        if (empty($real)) {
+            ha_log("row[$i] {$iface}/vipref={$vipref} - real interface not found; skipping");
+            continue;
+        }
+
+        $targets[] = [
+            'idx'            => (int)$i,
+            'iface_friendly' => $iface,
+            'iface_real'     => $real,
+            'vipref'         => $vipref,
+            'vhid'           => $vhid,
+        ];
+    }
+
+    return $targets;
+}
+
+
+/** Apply the CARP-derived state for a single target. */
+function ppha_apply_target_state(array $t, string $state) {
+    $iface = $t['iface_friendly'];
+    $real  = $t['iface_real'];
+    $vhid  = $t['vhid'];
+
+    if (!is_pppoe_real($real)) {
+        ha_log("warning: {$real} does not look like pppoeX; continuing anyway");
+    }
+
+    switch ($state) {
+        case 'MASTER':
+            ha_log("VHID {$vhid} MASTER - UP {$iface} ({$real})");
+            //Call iface_up with $iface as it is using pfSctl internally!
+            iface_up($iface);
+            break;
+        case 'BACKUP':
+        case 'INIT':
+            ha_log("VHID {$vhid} {$state} - DOWN {$iface} ({$real})");
+            iface_down($real);
+            break;
+        default:
+            ha_log("VHID {$vhid} {$state} - no action");
+    }
+}
+
+
 /** Parse devd CARP “subsystem” (e.g. "5@igb0", "carp1", "5") */
 function parse_carp_subsystem($subsys) {
     $subsys = trim((string)$subsys);
@@ -84,12 +167,6 @@ function get_carp_state_for_vhid($vhid) {
 }
 
 
-function real_ifname_for_friendly($friendly) {
-    $real = get_real_interface($friendly);
-    if (!empty($real)) return $real;
-    $ifcfg = config_get_path("interfaces/{$friendly}/if", '');
-    return $ifcfg ?: null;
-}
 function is_pppoe_real($ifname){ return (bool)preg_match('/^pppoe\d+$/', (string)$ifname); }
 //function iface_up($real){ mwexec("/sbin/ifconfig ".escapeshellarg($real)." up"); }
 // iface_up needs to use pfSctl and needs to be called with the iface name instead of the real interface
@@ -99,135 +176,28 @@ function iface_down($real){ mwexec("/sbin/ifconfig ".escapeshellarg($real)." dow
 
 
 function handle_carp_state_change($vhid, $state) {
-    $rows = ppha_get_rows();
-    ha_log_debug("Handle carp state change");
-    ha_log_debug("rows_count=" . count($rows));
-    if (!$rows) {
-        ha_log("No mappings configured; ignoring CARP change for VHID {$vhid}/{$state}");
+    ha_log_debug("carp change: vhid={$vhid} state={$state}");
+
+    $targets = ppha_build_targets($vhid);
+    if (!$targets) {
+        ha_log("no mappings for VHID {$vhid}; ignoring");
         return;
     }
-
-    // Build match set of VIP indices for this VHID
-    $vips = config_get_path('virtualip/vip', []);
-    $match = [];
-    foreach ((array)$vips as $idx => $vip) {
-        if (($vip['mode'] ?? '') === 'carp' && (int)($vip['vhid'] ?? -1) === (int)$vhid) {
-            $match[] = (string)$idx;
-        }
+    foreach ($targets as $t) {
+        ppha_apply_target_state($t, $state);
     }
-    ha_log_debug("vhid_matches=" . ($match ? implode(',', $match) : 'none'));
-    if (!$match) {
-        ha_log("No CARP VIP with VHID {$vhid}; ignoring");
-        return;
-    }
-
-    foreach ($rows as $i => $row) {
-        // Normalize values, allow '0' for vipref
-        $enabled = isset($row['enabled']) && strcasecmp((string)$row['enabled'], 'ON') === 0;
-        $vipref  = array_key_exists('vipref', $row) ? (string)$row['vipref'] : '';
-        $iface   = array_key_exists('iface',  $row) ? (string)$row['iface']  : '';
-
-        ha_log_debug("row[$i]: enabled=" . ($enabled ? 'ON' : var_export($row['enabled'] ?? null, true)) .
-                     " vipref=" . var_export($vipref, true) .
-                     " iface="  . var_export($iface, true));
-
-        if ($iface === '' || $vipref === '') {
-            ha_log_debug("row[$i] skipped: missing iface or vipref");
-            continue;
-        }
-        if (!$enabled) {
-            ha_log("Skipping disabled interface $iface. No action taken");
-            continue;
-        }
-        if (!in_array($vipref, $match, true)) {
-            ha_log("No interface configured for vipref {$vipref}; skip");
-            continue;
-        }
-
-        $real = real_ifname_for_friendly($iface);
-        if (!$real) {
-            ha_log_debug("{$iface}/vipref={$vipref} - real if not found; skip");
-            continue;
-        }
-        if (!is_pppoe_real($real)) {
-            ha_log("Warn: {$real} not pppoeX; proceeding anyway");
-        }
-
-        if ($state === 'MASTER') {
-            ha_log("VHID {$vhid} MASTER -> UP {$iface} ({$real})");
-            iface_up($real);
-        } elseif ($state === 'BACKUP') {
-            ha_log("VHID {$vhid} BACKUP -> DOWN {$iface} ({$real})");
-            iface_down($real);
-        } elseif ($state === 'INIT') {
-            ha_log("VHID {$vhid} INIT -> DOWN {$iface} ({$real})");
-            iface_down($real);
-        } else {
-            ha_log("VHID {$vhid} {$state} -> no action");
-        }
-    }
-
-    ha_log_debug("end Handle carp state change");
 }
 
-
 function reconcile_all() {
-    $rows = ppha_get_rows();
-    if (!$rows) {
+    $targets = ppha_build_targets(); // all mappings
+    if (!$targets) {
         ha_log("Reconcile: no mappings configured");
         return;
     }
-    ha_log("Running reconcile for all configured mappings");
-
-    $vips = config_get_path('virtualip/vip', []);
-
-    foreach ($rows as $i => $row) {
-        // Normalize like handle_carp_state_change() — do NOT use empty()
-        $enabled = isset($row['enabled']) && strcasecmp((string)$row['enabled'], 'ON') === 0;
-        $vipref  = array_key_exists('vipref', $row) ? (string)$row['vipref'] : '';
-        $friendly = array_key_exists('iface', $row) ? (string)$row['iface'] : '';
-
-        if ($friendly === '' || $vipref === '') {
-            ha_log_debug("Reconcile: row[$i] skipped (missing iface or vipref)");
-            continue;
-        }
-        if (!$enabled) {
-            ha_log_debug("Reconcile: row[$i] ($friendly) disabled — skip");
-            continue;
-        }
-
-        // Look up the VIP by *string* index; allow '0'
-        $vip = isset($vips[$vipref]) ? $vips[$vipref] : null;
-        if (!$vip || ($vip['mode'] ?? '') !== 'carp') {
-            ha_log_debug("Reconcile: row[$i] vipref={$vipref} not a CARP VIP — skip");
-            continue;
-        }
-
-        $vhid = (int)($vip['vhid'] ?? -1);
-        if ($vhid < 0) {
-            ha_log_debug("Reconcile: row[$i] vipref={$vipref} has invalid VHID — skip");
-            continue;
-        }
-
-        $state = get_carp_state_for_vhid($vhid) ?? 'INIT';
-        $real  = real_ifname_for_friendly($friendly);
-        if (!$real) {
-            ha_log("Reconcile: {$friendly} real if not found — skip");
-            continue;
-        }
-
-        if ($state === 'MASTER') {
-            ha_log("Reconcile: VHID {$vhid} MASTER -> UP {$friendly} ({$real})");
-            iface_up($real);
-        } elseif ($state === 'BACKUP') {
-            ha_log("Reconcile: VHID {$vhid} BACKUP -> DOWN {$friendly} ({$real})");
-            iface_down($real);
-        } elseif ($state === 'INIT') {
-            ha_log("Reconcile: VHID {$vhid} INIT -> DOWN {$friendly} ({$real})");
-            iface_down($real);
-        } else {
-            ha_log("Reconcile: VHID {$vhid} {$state} -> no action");
-        }
+    ha_log("Reconcile: evaluating " . count($targets) . " mapping(s)");
+    foreach ($targets as $t) {
+        $state = get_carp_state_for_vhid($t['vhid']) ?? 'INIT';
+        ppha_apply_target_state($t, $state);
     }
 }
 
