@@ -102,7 +102,6 @@ function handle_carp_state_change($vhid, $state) {
     $rows = ppha_get_rows();
     ha_log_debug("Handle carp state change");
     ha_log_debug("rows_count=" . count($rows));
-
     if (!$rows) {
         ha_log("No mappings configured; ignoring CARP change for VHID {$vhid}/{$state}");
         return;
@@ -113,7 +112,7 @@ function handle_carp_state_change($vhid, $state) {
     $match = [];
     foreach ((array)$vips as $idx => $vip) {
         if (($vip['mode'] ?? '') === 'carp' && (int)($vip['vhid'] ?? -1) === (int)$vhid) {
-            $match[] = (string)$idx;
+            $match[] = (string)$idx;   // important: keep as string
         }
     }
     ha_log_debug("vhid_matches=" . ($match ? implode(',', $match) : 'none'));
@@ -123,16 +122,15 @@ function handle_carp_state_change($vhid, $state) {
     }
 
     foreach ($rows as $i => $row) {
-        // Normalize + show what we got
+        // Normalize values, allow '0' for vipref
         $enabled = isset($row['enabled']) && strcasecmp((string)$row['enabled'], 'ON') === 0;
         $vipref  = array_key_exists('vipref', $row) ? (string)$row['vipref'] : '';
         $iface   = array_key_exists('iface',  $row) ? (string)$row['iface']  : '';
 
         ha_log_debug("row[$i]: enabled=" . ($enabled ? 'ON' : var_export($row['enabled'] ?? null, true)) .
-               " vipref=" . var_export($vipref, true) .
-               " iface="  . var_export($iface, true));
+                     " vipref=" . var_export($vipref, true) .
+                     " iface="  . var_export($iface, true));
 
-        // IMPORTANT: allow '0' — only reject truly missing values
         if ($iface === '' || $vipref === '') {
             ha_log_debug("row[$i] skipped: missing iface or vipref");
             continue;
@@ -157,7 +155,7 @@ function handle_carp_state_change($vhid, $state) {
 
         if ($state === 'MASTER') {
             ha_log("VHID {$vhid} MASTER -> UP {$iface} ({$real})");
-            iface_up($iface);
+            iface_up($real);     // <-- use real ifname here
         } elseif ($state === 'BACKUP') {
             ha_log("VHID {$vhid} BACKUP -> DOWN {$iface} ({$real})");
             iface_down($real);
@@ -175,26 +173,64 @@ function handle_carp_state_change($vhid, $state) {
 
 function reconcile_all() {
     $rows = ppha_get_rows();
-    if (!$rows){ ha_log("Reconcile: no mappings configured"); return; }
+    if (!$rows) {
+        ha_log("Reconcile: no mappings configured");
+        return;
+    }
     ha_log("Running reconcile for all configured mappings");
+
     $vips = config_get_path('virtualip/vip', []);
-    foreach ($rows as $row) {
-        if (empty($row['enabled']) || empty($row['vipref']) || empty($row['iface'])) continue;
-        $vip = $vips[$row['vipref']] ?? null;
-        if (!$vip || ($vip['mode'] ?? '')!=='carp') continue;
-        $vhid = (int)($vip['vhid'] ?? -1); if ($vhid<0) continue;
+
+    foreach ($rows as $i => $row) {
+        // Normalize like handle_carp_state_change() — do NOT use empty()
+        $enabled = isset($row['enabled']) && strcasecmp((string)$row['enabled'], 'ON') === 0;
+        $vipref  = array_key_exists('vipref', $row) ? (string)$row['vipref'] : '';
+        $friendly = array_key_exists('iface', $row) ? (string)$row['iface'] : '';
+
+        if ($friendly === '' || $vipref === '') {
+            ha_log_debug("Reconcile: row[$i] skipped (missing iface or vipref)");
+            continue;
+        }
+        if (!$enabled) {
+            ha_log_debug("Reconcile: row[$i] ($friendly) disabled — skip");
+            continue;
+        }
+
+        // Look up the VIP by *string* index; allow '0'
+        $vip = isset($vips[$vipref]) ? $vips[$vipref] : null;
+        if (!$vip || ($vip['mode'] ?? '') !== 'carp') {
+            ha_log_debug("Reconcile: row[$i] vipref={$vipref} not a CARP VIP — skip");
+            continue;
+        }
+
+        $vhid = (int)($vip['vhid'] ?? -1);
+        if ($vhid < 0) {
+            ha_log_debug("Reconcile: row[$i] vipref={$vipref} has invalid VHID — skip");
+            continue;
+        }
 
         $state = get_carp_state_for_vhid($vhid) ?? 'INIT';
-        $friendly = (string)$row['iface'];
-        $real = real_ifname_for_friendly($friendly);
-        if (!$real){ ha_log("Reconcile: {$friendly} real if not found; skip"); continue; }
+        $real  = real_ifname_for_friendly($friendly);
+        if (!$real) {
+            ha_log("Reconcile: {$friendly} real if not found — skip");
+            continue;
+        }
 
-        if ($state==='MASTER'){ ha_log("Reconcile: VHID {$vhid} MASTER - UP {$friendly} ({$real})"); iface_up($real); }
-        elseif ($state==='BACKUP'){ ha_log("Reconcile: VHID {$vhid} BACKUP - DOWN {$friendly} ({$real})"); iface_down($real); }
-        elseif ($state==='INIT'){ ha_log("Reconcile: VHID {$vhid} INIT - DOWN {$friendly} ({$real})"); iface_down($real); }
-        else { ha_log("Reconcile: VHID {$vhid} {$state} - no action"); }
+        if ($state === 'MASTER') {
+            ha_log("Reconcile: VHID {$vhid} MASTER -> UP {$friendly} ({$real})");
+            iface_up($real);
+        } elseif ($state === 'BACKUP') {
+            ha_log("Reconcile: VHID {$vhid} BACKUP -> DOWN {$friendly} ({$real})");
+            iface_down($real);
+        } elseif ($state === 'INIT') {
+            ha_log("Reconcile: VHID {$vhid} INIT -> DOWN {$friendly} ({$real})");
+            iface_down($real);
+        } else {
+            ha_log("Reconcile: VHID {$vhid} {$state} -> no action");
+        }
     }
 }
+
 
 /* entry */
 
