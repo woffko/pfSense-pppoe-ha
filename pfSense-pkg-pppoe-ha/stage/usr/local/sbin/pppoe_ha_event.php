@@ -112,7 +112,7 @@ function handle_carp_state_change($vhid, $state) {
     $match = [];
     foreach ((array)$vips as $idx => $vip) {
         if (($vip['mode'] ?? '') === 'carp' && (int)($vip['vhid'] ?? -1) === (int)$vhid) {
-            $match[] = (string)$idx;   // important: keep as string
+            $match[] = (string)$idx;
         }
     }
     ha_log_debug("vhid_matches=" . ($match ? implode(',', $match) : 'none'));
@@ -155,7 +155,7 @@ function handle_carp_state_change($vhid, $state) {
 
         if ($state === 'MASTER') {
             ha_log("VHID {$vhid} MASTER -> UP {$iface} ({$real})");
-            iface_up($real);     // <-- use real ifname here
+            iface_up($real);
         } elseif ($state === 'BACKUP') {
             ha_log("VHID {$vhid} BACKUP -> DOWN {$iface} ({$real})");
             iface_down($real);
