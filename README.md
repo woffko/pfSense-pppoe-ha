@@ -61,11 +61,12 @@ This ensures that only the current CARP master attempts the PPPoE session, avoid
 ### Build locally
 
 ```sh
+#current version 0.1.1
 # remove package if already installed
-pkg delete -y pfSense-pkg-pppoe-ha-0.1
+pkg delete -y pfSense-pkg-pppoe-ha-<version>
 
 # build from source (run in repo root)
 pkg create -m metadata -r stage -p pkg-plist -o .
 
 # install generated pkg
-pkg add ./pfSense-pkg-pppoe-ha-0.1.pkg
+pkg add ./pfSense-pkg-pppoe-ha-<version>.pkg
