@@ -166,10 +166,39 @@ function get_carp_state_for_vhid($vhid) {
     return null;
 }
 
+function get_pppoe_status($real) {
+    $out = [];
+    @exec("/sbin/ifconfig " . escapeshellarg($real) . " 2>&1", $out);
+
+    $has_v4_p2p = false;
+    $has_v6_global = false;
+
+    foreach ($out as $line) {
+        // IPv4 PPPoE shows: inet <local> --> <peer>
+        if (preg_match('/^\s*inet\s+\S+\s+-->\s+\S+/', $line)) {
+            $has_v4_p2p = true;
+            continue;
+        }
+        // IPv6 global (exclude link-local fe80:: and exclude 'tentative')
+        if (preg_match('/^\s*inet6\s+([0-9a-f:]+)/i', $line, $m)) {
+            $addr = strtolower($m[1]);
+            if (strpos($addr, 'fe80:') !== 0 && stripos($line, 'tentative') === false) {
+                $has_v6_global = true;
+            }
+        }
+    }
+
+    return [
+        'active'       => ($has_v4_p2p || $has_v6_global),
+        'has_ipv4_p2p' => $has_v4_p2p,
+        'has_v6_global'=> $has_v6_global,
+    ];
+}
 
 function is_pppoe_real($ifname){ return (bool)preg_match('/^pppoe\d+$/', (string)$ifname); }
-//function iface_up($real){ mwexec("/sbin/ifconfig ".escapeshellarg($real)." up"); }
-// iface_up needs to use pfSctl and needs to be called with the iface name instead of the real interface
+
+
+// iface_up needs to use pfSctl and needs to be called with the iface name instead of the real interface!
 function iface_up($iface){ mwexec("/usr/local/sbin/pfSctl -c 'interface reload ".escapeshellarg($iface)."'"); }
 function iface_down($real){ mwexec("/sbin/ifconfig ".escapeshellarg($real)." down"); }
 
@@ -197,6 +226,18 @@ function reconcile_all() {
     ha_log("Reconcile: evaluating " . count($targets) . " mapping(s)");
     foreach ($targets as $t) {
         $state = get_carp_state_for_vhid($t['vhid']) ?? 'INIT';
+        $desired_up = ($state === 'MASTER');
+
+        // Do not reload a PPPoE interface if it is already up and if the desired state also is up
+        if (is_pppoe_real($t['iface_real'])) {
+            $st = get_pppoe_status($t['iface_real']);
+            if ($desired_up && $st['active']) {
+                ha_log("Reconcile: VHID {$t['vhid']} target=UP but {$t['iface_friendly']} ({$t['iface_real']}) already UP - skip");
+                continue;
+            }
+        }
+
+        // Non-PPPoE (or PPPoE not active) - proceed as usual
         ppha_apply_target_state($t, $state);
     }
 }
