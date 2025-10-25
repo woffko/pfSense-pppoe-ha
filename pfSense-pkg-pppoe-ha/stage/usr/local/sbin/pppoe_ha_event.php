@@ -29,8 +29,9 @@ function ha_log($msg, $prio = LOG_NOTICE) {
 function ha_log_debug($msg) { ha_log($msg, LOG_DEBUG); }
 
 /* const */
-const SUPPRESS_DIR       = '/var/run/pppoe_ha';
-const STABILIZE_POLL_SEC = 30;
+const SUPPRESS_DIR        = '/var/run/pppoe_ha';
+const SUPPRESS_TTL_SEC    = 180;  // base TTL, re-armed in loop
+const STABILIZE_POLL_SEC  = 30;   // poll interval
 
 /* utils */
 function ppha_sanitize_token($s) {
@@ -39,7 +40,7 @@ function ppha_sanitize_token($s) {
     return $s;
 }
 
-/* per-VHID suppression */
+/* per-VHID suppression state */
 function ppha_suppress_path(int $vhid) {
     @mkdir(SUPPRESS_DIR, 0755, true);
     return SUPPRESS_DIR . '/suppress.' . max(1, $vhid) . '.json';
@@ -72,7 +73,7 @@ function spawn_bg(array $args) {
     mwexec($cmd);
 }
 
-/* targets from package config */
+/* read targets from package config */
 function ppha_build_targets($only_vhid = null) {
     $rows = ppha_get_rows();
     $vips = config_get_path('virtualip/vip', []);
@@ -89,7 +90,7 @@ function ppha_build_targets($only_vhid = null) {
         if (!$vip || ($vip['mode'] ?? '') !== 'carp') { continue; }
         $vhid = (int)($vip['vhid'] ?? -1);
         if ($vhid < 0) { continue; }
-        if ($only_vhid !== null && (int)$only_vhid !== $vhid) { continue; }
+        if ($only_vhid !== null && (int)$only_vhid > 0 && (int)$only_vhid !== $vhid) { continue; }
 
         $real = get_real_interface($iface);
         if (empty($real)) {
@@ -170,7 +171,7 @@ function get_pppoe_status($real) {
     ];
 }
 
-/* pfSense iface ops */
+/* pfSense interface ops */
 function iface_up($friendly){
     $cmd = "/usr/local/sbin/pfSctl -c " . escapeshellarg("interface reload {$friendly}");
     mwexec($cmd);
@@ -197,7 +198,7 @@ function ppha_apply_target_state(array $t, string $state) {
             } else {
                 iface_up($iface);
             }
-            ppha_set_suppression(3600, 'master_stabilize', $vhid);
+            ppha_set_suppression(SUPPRESS_TTL_SEC, 'master_stabilize', $vhid);
             spawn_bg(['MASTER_POST', (string)$vhid, $iface, $real]);
             break;
 
@@ -246,6 +247,19 @@ function reconcile_target(int $vhid, bool $quiet=false) {
     }
 }
 
+/* reconcile all VHIDs */
+function reconcile_all(bool $quiet=false) {
+    $targets = ppha_build_targets(null);
+    if (!$targets) { if (!$quiet) ha_log("reconcile all: no mappings"); return; }
+    $seen = [];
+    foreach ($targets as $t) {
+        $vhid = (int)$t['vhid'];
+        if (isset($seen[$vhid])) { continue; }
+        $seen[$vhid] = true;
+        reconcile_target($vhid, $quiet);
+    }
+}
+
 /* MASTER stabilization loop */
 function master_post_sequence(int $vhid, string $iface, string $real) {
     ha_log("master_post: start for VHID {$vhid}");
@@ -266,6 +280,10 @@ function master_post_sequence(int $vhid, string $iface, string $real) {
 
         ha_log_debug("master_post: cur={$cur} pppoe_ok=" . ($pppoe_ok ? '1' : '0') . " reconcile and wait");
         reconcile_target($vhid, true);
+
+        // re-arm suppression so the window does not expire mid-stabilization
+        ppha_set_suppression(SUPPRESS_TTL_SEC, 'master_stabilize', $vhid);
+
         sleep(STABILIZE_POLL_SEC);
     }
 }
@@ -300,8 +318,16 @@ function main_entry($argv) {
         exit(0);
     }
 
-    if ($cmd === 'RECONCILE')       { reconcile_target((int)($argv[1] ?? 0) ?: 0, false); exit(0); }
-    if ($cmd === 'RECONCILE_QUIET') { reconcile_target((int)($argv[1] ?? 0) ?: 0, true);  exit(0); }
+    if ($cmd === 'RECONCILE') {
+        $vhid = isset($argv[1]) ? (int)$argv[1] : 0;
+        if ($vhid > 0) { reconcile_target($vhid, false); } else { reconcile_all(false); }
+        exit(0);
+    }
+    if ($cmd === 'RECONCILE_QUIET') {
+        $vhid = isset($argv[1]) ? (int)$argv[1] : 0;
+        if ($vhid > 0) { reconcile_target($vhid, true); } else { reconcile_all(true); }
+        exit(0);
+    }
 
     if ($cmd === 'MASTER_POST') {
         $vhid = (int)($argv[1] ?? 0);
