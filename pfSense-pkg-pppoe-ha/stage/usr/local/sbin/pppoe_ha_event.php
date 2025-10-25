@@ -64,6 +64,14 @@ function ppha_is_suppressed(int $vhid) {
     return true;
 }
 
+/* spawn self in background */
+function spawn_bg(array $args) {
+    $php  = PHP_BINARY ?: "/usr/local/bin/php";
+    $self = escapeshellarg(realpath(__FILE__));
+    $cmd  = $php . " -f " . $self . ' ' . implode(' ', array_map('escapeshellarg', $args)) . " >/dev/null 2>&1 &";
+    mwexec($cmd);
+}
+
 /* targets from package config */
 function ppha_build_targets($only_vhid = null) {
     $rows = ppha_get_rows();
@@ -238,7 +246,7 @@ function reconcile_target(int $vhid, bool $quiet=false) {
     }
 }
 
-/* MASTER stabilization loop: keep suppression until MASTER and PPPoE OK */
+/* MASTER stabilization loop */
 function master_post_sequence(int $vhid, string $iface, string $real) {
     ha_log("master_post: start for VHID {$vhid}");
     while (true) {
