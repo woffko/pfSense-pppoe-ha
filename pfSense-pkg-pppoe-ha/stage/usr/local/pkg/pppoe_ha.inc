@@ -37,7 +37,7 @@ function ppha_cfg_basepath() {
     }
     // None exist yet: adopt the no-underscore form as canonical
     $base = 'installedpackages/pppoeha/config/0';
-    // Ensure parent nodes exist so later set_path doesn’t fail
+    // Ensure parent nodes exist so later set_path does not fail
     $cur = config_get_path($base, null);
     if (!is_array($cur)) {
         config_set_path($base, []);
@@ -159,22 +159,76 @@ function ppha_before_form_pppoe_ha(&$pkg) {
     unset($field);
 }
 
-/** Run a one-shot reconcile and surface a GUI message */
-function ppha_run_reconcile_now() {
-    $rc = 0;
-    // Fire and forget; logs will appear under tag 'pppoe-ha'
-    mwexec('/usr/local/sbin/pppoe_ha_event reconcile', $rc);
-    // Tell the GUI something happened
-    $msg = $rc === 0
-        ? 'PPPoE HA: Reconcile executed. See Status → System Logs (tag "pppoe-ha") for details.'
-        : 'PPPoE HA: Reconcile attempted, but the helper returned a non-zero status. Check logs.';
-    // pkg_edit.php will render $savemsg if set
-    $GLOBALS['savemsg'] = $msg;
+/* --------------------------------------------------------------------
+ * Added helpers to drive the external reconcile correctly
+ * ------------------------------------------------------------------*/
+
+/**
+ * Collect unique VHIDs from enabled rows that reference CARP VIPs.
+ * Used to call the helper with specific VHIDs.
+ */
+function ppha_get_mapped_vhids() {
+    $rows = ppha_get_rows();
+    $vips = config_get_path('virtualip/vip', []);
+    $set  = [];
+
+    if (!is_array($rows) || !is_array($vips)) {
+        return [];
+    }
+
+    foreach ($rows as $row) {
+        $enabled = isset($row['enabled']) && strcasecmp((string)$row['enabled'], 'ON') === 0;
+        $vipref  = isset($row['vipref']) ? (string)$row['vipref'] : '';
+        if (!$enabled || $vipref === '') {
+            continue;
+        }
+        $vip = $vips[$vipref] ?? null;
+        if (!$vip || ($vip['mode'] ?? '') !== 'carp') {
+            continue;
+        }
+        $vhid = (int)($vip['vhid'] ?? 0);
+        if ($vhid > 0) {
+            $set[$vhid] = true;
+        }
+    }
+
+    return array_keys($set);
 }
+
+/**
+ * Run reconcile via helper for each mapped VHID.
+ * Falls back to global reconcile if no rows are mapped.
+ */
+function ppha_run_reconcile_now($quiet = false) {
+    $vhids = ppha_get_mapped_vhids();
+    $cmd   = $quiet ? 'reconcile_quiet' : 'reconcile';
+    $rc_agg = 0;
+
+    if ($vhids) {
+        foreach ($vhids as $vhid) {
+            $rc = 0;
+            mwexec("/usr/local/sbin/pppoe_ha_event {$cmd} " . (int)$vhid, $rc);
+            if ($rc !== 0) {
+                $rc_agg = $rc;
+            }
+        }
+    } else {
+        // No mappings: call without VHID
+        mwexec("/usr/local/sbin/pppoe_ha_event {$cmd}", $rc_agg);
+    }
+
+    $GLOBALS['savemsg'] = ($rc_agg === 0)
+        ? 'PPPoE HA: Reconcile executed. See Status -> System Logs (tag "pppoe-ha").'
+        : 'PPPoE HA: Reconcile attempted, helper returned non-zero for at least one VHID. See logs.';
+}
+
+/* --------------------------------------------------------------------
+ * Validation and resync hooks
+ * ------------------------------------------------------------------*/
 
 /* Validation (optional) */
 function ppha_validate_form_pppoe_ha($post, &$input_errors) {
-    // Add checks here if needed (e.g., require enabled rows to have both fields)
+    // Add checks here if needed
 }
 
 /* Resync (ensures node exists; no daemon action yet) */
