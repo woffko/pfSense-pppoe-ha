@@ -28,10 +28,10 @@ function ha_log($msg, $prio = LOG_NOTICE) {
 }
 function ha_log_debug($msg) { ha_log($msg, LOG_DEBUG); }
 
-/* const */
-const SUPPRESS_DIR        = '/var/run/pppoe_ha';
-const SUPPRESS_TTL_SEC    = 180;  // base TTL, re-armed in loop
-const STABILIZE_POLL_SEC  = 30;   // poll interval
+/* constants */
+const SUPPRESS_DIR        = '/var/run/pppoe_ha';   // per-VHID files live here
+const STABILIZE_POLL_SEC  = 30;                    // sleep between checks
+const SUPPRESS_TTL_SEC    = 180;                   // coarse safety window
 
 /* utils */
 function ppha_sanitize_token($s) {
@@ -40,7 +40,7 @@ function ppha_sanitize_token($s) {
     return $s;
 }
 
-/* per-VHID suppression state */
+/* per-VHID suppression files */
 function ppha_suppress_path(int $vhid) {
     @mkdir(SUPPRESS_DIR, 0755, true);
     return SUPPRESS_DIR . '/suppress.' . max(1, $vhid) . '.json';
@@ -51,6 +51,13 @@ function ppha_set_suppression(int $seconds, string $reason, int $vhid) {
     $data  = ['until'=>$until, 'reason'=>$reason, 'vhid'=>$vhid];
     @file_put_contents($path, json_encode($data));
     ha_log("suppression on for {$seconds}s reason={$reason} vhid={$vhid}");
+}
+/* silent rearm to avoid log spam */
+function ppha_rearm_suppression(int $vhid, int $seconds) {
+    $path  = ppha_suppress_path($vhid);
+    $until = time() + max(1, $seconds);
+    $data  = ['until'=>$until, 'reason'=>'master_stabilize', 'vhid'=>$vhid];
+    @file_put_contents($path, json_encode($data));
 }
 function ppha_clear_suppression(int $vhid) {
     $path = ppha_suppress_path($vhid);
@@ -90,7 +97,7 @@ function ppha_build_targets($only_vhid = null) {
         if (!$vip || ($vip['mode'] ?? '') !== 'carp') { continue; }
         $vhid = (int)($vip['vhid'] ?? -1);
         if ($vhid < 0) { continue; }
-        if ($only_vhid !== null && (int)$only_vhid > 0 && (int)$only_vhid !== $vhid) { continue; }
+        if ($only_vhid !== null && (int)$only_vhid !== $vhid) { continue; }
 
         $real = get_real_interface($iface);
         if (empty($real)) {
@@ -145,13 +152,14 @@ function real_iface_present($real){
     @exec("/sbin/ifconfig " . escapeshellarg($real) . " 2>/dev/null", $out, $rc);
     return ($rc === 0 && !empty($out));
 }
+/* Determine if PPPoE is operational: flags UP+RUNNING and v4 p2p or global v6 */
 function get_pppoe_status($real) {
     $out = [];
     @exec("/sbin/ifconfig " . escapeshellarg($real) . " 2>&1", $out);
     $up_flag = false; $running_flag = false; $has_v4_p2p = false; $has_v6_global = false;
     foreach ($out as $line) {
-        if (preg_match('/flags=\S+<([^>]+)>/', $line, $m)) {
-            $flags = explode(',', strtoupper($m[1]));
+        if (preg_match('/flags=\S+<([^>]+)>/i', $line, $m)) {
+            $flags = array_map('strtoupper', array_map('trim', explode(',', $m[1])));
             $up_flag = in_array('UP', $flags, true) || $up_flag;
             $running_flag = in_array('RUNNING', $flags, true) || $running_flag;
         }
@@ -163,15 +171,15 @@ function get_pppoe_status($real) {
     }
     $ok = ($up_flag && $running_flag && ($has_v4_p2p || $has_v6_global));
     return [
-        'up_flag' => $up_flag,
+        'up_flag'      => $up_flag,
         'running_flag' => $running_flag,
         'has_ipv4_p2p' => $has_v4_p2p,
-        'has_v6_global' => $has_v6_global,
-        'ok' => $ok
+        'has_v6_global'=> $has_v6_global,
+        'ok'           => $ok
     ];
 }
 
-/* pfSense interface ops */
+/* pfSense iface ops */
 function iface_up($friendly){
     $cmd = "/usr/local/sbin/pfSctl -c " . escapeshellarg("interface reload {$friendly}");
     mwexec($cmd);
@@ -180,7 +188,7 @@ function iface_down($real){
     mwexec("/sbin/ifconfig " . escapeshellarg($real) . " down");
 }
 
-/* apply state to one target */
+/* apply state to one mapping */
 function ppha_apply_target_state(array $t, string $state) {
     $iface = $t['iface_friendly'];
     $real  = $t['iface_real'];
@@ -198,6 +206,7 @@ function ppha_apply_target_state(array $t, string $state) {
             } else {
                 iface_up($iface);
             }
+            /* set once to log it; loop will rearm silently */
             ppha_set_suppression(SUPPRESS_TTL_SEC, 'master_stabilize', $vhid);
             spawn_bg(['MASTER_POST', (string)$vhid, $iface, $real]);
             break;
@@ -212,14 +221,14 @@ function ppha_apply_target_state(array $t, string $state) {
     }
 }
 
-/* reconcile one VHID */
+/* reconcile for one VHID or all (vhid=0 means all) */
 function reconcile_target(int $vhid, bool $quiet=false) {
-    $targets = ppha_build_targets($vhid);
+    $targets = ($vhid > 0) ? ppha_build_targets($vhid) : ppha_build_targets(null);
     if (!$targets) { if (!$quiet) ha_log("reconcile: no mappings for VHID {$vhid}"); return; }
 
     foreach ($targets as $t) {
         $iface = $t['iface_friendly']; $real = $t['iface_real'];
-        $state = get_carp_state_for_vhid($vhid) ?? 'INIT';
+        $state = get_carp_state_for_vhid($t['vhid']) ?? 'INIT';
 
         if ($state === 'MASTER') {
             if (is_pppoe_real($real)) {
@@ -242,48 +251,42 @@ function reconcile_target(int $vhid, bool $quiet=false) {
             if (!$quiet) ha_log("reconcile: BACKUP - bring {$real} down");
             iface_down($real);
         } else {
-            if (!$quiet) ha_log("reconcile: VHID {$vhid} state INIT - skip");
+            if (!$quiet) ha_log("reconcile: VHID {$t['vhid']} state INIT - skip");
         }
     }
 }
 
-/* reconcile all VHIDs */
-function reconcile_all(bool $quiet=false) {
-    $targets = ppha_build_targets(null);
-    if (!$targets) { if (!$quiet) ha_log("reconcile all: no mappings"); return; }
-    $seen = [];
-    foreach ($targets as $t) {
-        $vhid = (int)$t['vhid'];
-        if (isset($seen[$vhid])) { continue; }
-        $seen[$vhid] = true;
-        reconcile_target($vhid, $quiet);
-    }
-}
-
-/* MASTER stabilization loop */
+/* single-stage post loop for MASTER: end when MASTER and PPPoE OK, or when state changes */
 function master_post_sequence(int $vhid, string $iface, string $real) {
     ha_log("master_post: start for VHID {$vhid}");
     while (true) {
         $cur = get_carp_state_for_vhid($vhid);
 
+        /* if no longer MASTER, clear and quietly reconcile, then exit */
+        if ($cur !== 'MASTER') {
+            ha_log("master_post: state became {$cur}, clearing suppression vhid={$vhid}");
+            reconcile_target($vhid, true);
+            ppha_clear_suppression($vhid);
+            return;
+        }
+
+        /* verify PPPoE readiness on MASTER */
         $pppoe_ok = true;
         if (is_pppoe_real($real) && real_iface_present($real)) {
             $st = get_pppoe_status($real);
             $pppoe_ok = $st['ok'];
         }
 
-        if ($cur === 'MASTER' && $pppoe_ok) {
-            ha_log("master_post: ok, clearing suppression vhid={$vhid}");
+        if ($pppoe_ok) {
+            ha_log("master_post: MASTER and PPPoE OK, clearing suppression vhid={$vhid}");
             ppha_clear_suppression($vhid);
             return;
         }
 
-        ha_log_debug("master_post: cur={$cur} pppoe_ok=" . ($pppoe_ok ? '1' : '0') . " reconcile and wait");
+        /* still MASTER but PPPoE not OK: reconcile, rearm silently, wait */
+        ha_log_debug("master_post: cur=MASTER, pppoe_ok=0 -> reconcile and wait");
         reconcile_target($vhid, true);
-
-        // re-arm suppression so the window does not expire mid-stabilization
-        ppha_set_suppression(SUPPRESS_TTL_SEC, 'master_stabilize', $vhid);
-
+        ppha_rearm_suppression($vhid, SUPPRESS_TTL_SEC);
         sleep(STABILIZE_POLL_SEC);
     }
 }
@@ -318,16 +321,8 @@ function main_entry($argv) {
         exit(0);
     }
 
-    if ($cmd === 'RECONCILE') {
-        $vhid = isset($argv[1]) ? (int)$argv[1] : 0;
-        if ($vhid > 0) { reconcile_target($vhid, false); } else { reconcile_all(false); }
-        exit(0);
-    }
-    if ($cmd === 'RECONCILE_QUIET') {
-        $vhid = isset($argv[1]) ? (int)$argv[1] : 0;
-        if ($vhid > 0) { reconcile_target($vhid, true); } else { reconcile_all(true); }
-        exit(0);
-    }
+    if ($cmd === 'RECONCILE')       { reconcile_target((int)($argv[1] ?? 0), false); exit(0); }
+    if ($cmd === 'RECONCILE_QUIET') { reconcile_target((int)($argv[1] ?? 0), true);  exit(0); }
 
     if ($cmd === 'MASTER_POST') {
         $vhid = (int)($argv[1] ?? 0);
@@ -340,7 +335,7 @@ function main_entry($argv) {
 
     echo "Usage:\n";
     echo "  pppoe_ha_event carp <vhid|carpX|vhid@realif> <MASTER|BACKUP>\n";
-    echo "  pppoe_ha_event reconcile [vhid]\n";
+    echo "  pppoe_ha_event reconcile [vhid]   (vhid=0 means all)\n";
     echo "  pppoe_ha_event reconcile_quiet [vhid]\n";
     exit(1);
 }
