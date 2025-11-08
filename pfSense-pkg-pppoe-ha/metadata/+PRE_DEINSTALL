@@ -10,12 +10,13 @@ set -e
 PHP_BIN="/usr/local/bin/php"; [ -x "$PHP_BIN" ] || PHP_BIN="/usr/local/sbin/php"
 
 "$PHP_BIN" -r '
-  require_once("config.inc");
-  require_once("util.inc");
+  require_once("/etc/inc/config.inc");
+  require_once("/etc/inc/util.inc");
   global $config;
 
-  // Load fresh config
-  $config = parse_config(true);
+  if (empty($config)) {
+      config_read_file(true, true);
+  }
 
   // Fetch the native list of menu entries
   $menus = config_get_path("installedpackages/menu", []);
