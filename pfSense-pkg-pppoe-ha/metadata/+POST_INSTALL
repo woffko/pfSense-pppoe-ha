@@ -21,8 +21,8 @@ fi
 # --- 2) If menu entry is still missing, append it using the native list shape ---
 
 "$PHP_BIN" -r '
-  require_once("config.inc");
-  require_once("util.inc");
+require_once("/etc/inc/config.inc");
+require_once("/etc/inc/util.inc");
   global $config;
 
   $config = parse_config(true);
