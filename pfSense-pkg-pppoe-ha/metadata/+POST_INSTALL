@@ -2,23 +2,23 @@
 # Post-install for pfSense-pkg-pppoe-ha
 # - Try to register with pfSense via rc.packages (best effort)
 # - If that fails (common for local pkg add), inject menu into config.xml
-# - Clear menu cache
-# - Restart devd and reconcile PPPoE state
+# - Insert our devd CARP hook
+# - Reload devd and reconcile PPPoE state
 
 set -e
 
+# --- 1) Attempt registration via rc.packages ---
 PKGNAME="pfSense-pkg-pppoe-ha"
 
-# Resolve PHP and rc.packages inside pkg rootdir (when pkg installs into a rootdir)
 PHP_BIN="${PKG_ROOTDIR}/usr/local/bin/php"; [ -x "$PHP_BIN" ] || PHP_BIN="/usr/local/bin/php"
 RC_PACKAGES="${PKG_ROOTDIR}/etc/rc.packages"; [ -x "$RC_PACKAGES" ] || RC_PACKAGES="/etc/rc.packages"
 
-# 1) Attempt normal registration through pfSense package handler
 if [ -x "$PHP_BIN" ] && [ -f "$RC_PACKAGES" ]; then
   "$PHP_BIN" -f "$RC_PACKAGES" "$PKGNAME" POST-INSTALL >/dev/null 2>&1 || true
 fi
 
-# 2) Ensure our menu entry exists even when rc.packages did not add it
+# --- 2) If menu entry is still missing, append it using the native list shape ---
+
 "$PHP_BIN" -r '
   require_once("/etc/inc/config.inc");
   require_once("/etc/inc/util.inc");
@@ -29,38 +29,33 @@ fi
   }
 
   $menus = config_get_path("installedpackages/menu", []);
-  if (!is_array($menus)) {
-      $menus = [];
-  }
+  if (!is_array($menus)) { $menus = []; }
 
-  $targetUrl = "/pkg_edit.php?xml=pppoe_ha.xml&id=0";
+  $targetUrl = "/pkg_edit.php?xml=pppoe_ha.xml&id=0"; // raw &, serializer escapes once
   $exists = false;
   foreach ($menus as $m) {
-      if (is_array($m) && ($m["url"] ?? "") === $targetUrl) {
-          $exists = true;
-          break;
-      }
+    if (is_array($m) && ($m["url"] ?? "") === $targetUrl) { $exists = true; break; }
   }
 
   if (!$exists) {
-      $menus[] = [
-          "name"        => "PPPoE High Availability",
-          "tooltiptext" => "Enable or disable PPPoE based on CARP state",
-          "section"     => "Services",
-          "url"         => $targetUrl,
-      ];
-      config_set_path("installedpackages/menu", $menus);
-      write_config("Add PPPoE HA menu (CLI-safe post-install)");
+    $menus[] = [
+      "name"        => "PPPoE High Availability",
+      "tooltiptext" => "Enable/disable PPPoE by CARP state",
+      "section"     => "Services",
+      "url"         => $targetUrl,
+    ];
+    config_set_path("installedpackages/menu", $menus);
+    write_config("Add PPPoE HA menu (CLI safe)");
   }
 ' >/dev/null 2>&1 || true
 
-# 3) Clear menu cache so the new entry shows up immediately
+# Clear cached menus only (no GUI restart needed)
 rm -f /tmp/*menu* /tmp/.menu* >/dev/null 2>&1 || true
 
-# 4) Restart devd to load our devd rules if the package ships any
+# restart devd to take our config
 service devd restart >/dev/null 2>&1 || true
 
-# 5) Run one-time PPPoE HA reconcile to align with current CARP state
+# --- 4) Reconcile PPPoE state once after install ---
 if [ -x /usr/local/sbin/pppoe_ha_event ]; then
     /usr/local/sbin/pppoe_ha_event reconcile >/dev/null 2>&1 || true
 fi
