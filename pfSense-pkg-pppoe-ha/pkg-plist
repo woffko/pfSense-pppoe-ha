@@ -1,6 +1,9 @@
+@mode 644
 usr/local/pkg/pppoe_ha.xml
 usr/local/pkg/pppoe_ha.inc
+usr/local/share/pfSense-pkg-pppoe-ha/info.xml
+@mode 755
 usr/local/sbin/pppoe_ha_event
 usr/local/sbin/pppoe_ha_event.php
 usr/local/etc/rc.d/pppoe_ha
-usr/local/share/pfSense-pkg-pppoe-ha/info.xml
+@mode 644
